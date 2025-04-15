@@ -1,5 +1,4 @@
-const { port } = require('./config');
-
+const { PORT } = require('./config.js');
 const express = require('express');
 const app = express();
 const cors = require("cors")
@@ -10,6 +9,6 @@ app.use(cors())
 // Ruta para obtener grupo alimenticio
 app.use("/api_nutrilink/mantenedor_alimentos", require("./routes/mantenedor_alimento.js"));
 
-app.listen(port, () => {
-  console.log(`Servidor corriendo en http://localhost:${port}`);
+app.listen(PORT, () => {
+  console.log(`Servidor corriendo en ${PORT}`);
 });
