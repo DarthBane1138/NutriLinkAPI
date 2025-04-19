@@ -559,54 +559,62 @@ router.get('/diagnosticar_agb', async (req, res) => {
         }
         const pacienteIdNum = parseInt(pacienteId, 10);
 
-        // 1. Calcular el AGB usando la función existente
-        const agbResult = await pool.query('SELECT public.calcular_agb($1, $2) as agb', [pacienteIdNum, fecha]); 
-        
-        if (!agbResult.rows || agbResult.rows.length === 0 || agbResult.rows[0].agb === null) {
-            return res.status(404).json({
-                status: 'not_found',
-                mensaje: 'No se pudo calcular el AGB para el paciente y fecha especificados.' 
-            });
-        }
-        const agbCalculado = agbResult.rows[0].agb;
-
-        // 2. Llamar a la función de clasificación de AGB
-        const clasificacionSql = 'SELECT public.diagnosticar_agb($1, $2, $3) AS clasificacion'; 
-        const clasificacionParams = [pacienteIdNum, fecha, agbCalculado]; 
+        // 1. Llamar directamente a la función de diagnóstico de AGB 
+        //    que ahora espera pacienteId y fecha
+        const clasificacionSql = 'SELECT public.diagnosticar_agb($1, $2) AS clasificacion'; 
+        const clasificacionParams = [pacienteIdNum, fecha]; // *** Pasar pacienteId y fecha ***
         const clasificacionResult = await pool.query(clasificacionSql, clasificacionParams);
 
-        // 3. Procesar el resultado (igual que antes)
-        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 || clasificacionResult.rows[0].clasificacion === null) {
-            return res.status(500).json({ status: 'error', mensaje: 'No se pudo obtener la clasificación AGB.' }); 
+        // 2. Procesar el resultado (Texto o NULL)
+        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 ) {
+             return res.status(500).json({ status: 'error', mensaje: 'Error al obtener respuesta de la función de diagnóstico AGB.' }); 
         }
+        
+        const clasificacionTexto = clasificacionResult.rows[0].clasificacion; 
 
-        const clasificacionTexto = clasificacionResult.rows[0].clasificacion;
-
-        // Manejar errores conocidos devueltos por la función (igual que antes)
-        const erroresConocidos = [ /* ... lista de errores ... */ ];
-        if (erroresConocidos.includes(clasificacionTexto)) {
-             const statusCode = (clasificacionTexto === 'Paciente no encontrado') ? 404 : 400; 
+        // Si la función devolvió NULL (por error interno o validación inicial fallida)
+        if (clasificacionTexto === null) {
+             return res.status(500).json({ // O 400 
+                 status: 'error',
+                 mensaje: 'No se pudo obtener un diagnóstico válido para AGB (Error interno o parámetros inválidos).' 
+             });
+         }
+         
+         // Verificar si la respuesta es uno de los mensajes de error/informativos de la función
+         const erroresConocidos = [ 
+            'Paciente no encontrado', 
+            'Datos incompletos del paciente (sexo/fecha nac.)', 
+            'Sexo inválido registrado',
+            'AGB no calculado previamente para esta fecha',
+            'Clasificación no disponible', // Mensaje si edad fuera de rango, etc.
+            // Podría haber otros como 'Descripción no encontrada para ID X'
+         ];
+        if (erroresConocidos.includes(clasificacionTexto) || clasificacionTexto.startsWith('Descripción no encontrada')) {
+             const statusCode = (clasificacionTexto === 'Paciente no encontrado' || clasificacionTexto.startsWith('AGB no calculado')) ? 404 : 400; 
              return res.status(statusCode).json({ status: 'error', mensaje: `No se pudo clasificar: ${clasificacionTexto}` });
          }
 
-        // 4. Devolver la clasificación obtenida
+        // 3. Devolver la clasificación obtenida (Texto)
         res.status(200).json({
             status: 'success',
             pacienteId: pacienteIdNum,
             fecha: fecha,
-            agbCalculado: agbCalculado, 
-            clasificacion: clasificacionTexto 
+            clasificacion: clasificacionTexto // El diagnóstico devuelto por la función
         });
 
-} catch (error) {
-    console.error("Error en GET /diagnosticar_agb:", error); 
-    res.status(500).json({
-        status: 'error',
-        mensaje: 'Error interno del servidor al intentar obtener la clasificación AGB.', 
-    });
-}
+    } catch (error) {
+        console.error("Error en GET /diagnosticar_agb:", error); 
+        const dbErrorMessage = error.message || 'Error desconocido.';
+        res.status(500).json({
+            status: 'error',
+            mensaje: 'Error interno del servidor al intentar obtener el diagnóstico AGB.', 
+            detalle_db: dbErrorMessage 
+        });
+    }
 });
 
+
+// Endpoint para OBTENER LA CLASIFICACIÓN/DIAGNÓSTICO del IMC (Devuelve Texto)
 router.get('/diagnosticar_imc', async (req, res) => { 
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET'); 
@@ -621,58 +629,56 @@ router.get('/diagnosticar_imc', async (req, res) => {
         }
         const pacienteIdNum = parseInt(pacienteId, 10);
 
-        // 1. Calcular el IMC usando la función 'calcular_imc'
-        const imcResult = await pool.query('SELECT public.calcular_imc($1, $2) as imc', [pacienteIdNum, fecha]); 
-        
-        if (!imcResult.rows || imcResult.rows.length === 0 || imcResult.rows[0].imc === null) {
-            return res.status(404).json({
-                status: 'not_found',
-                mensaje: 'No se pudo calcular el IMC para el paciente y fecha especificados (datos fuente podrían faltar o ser inválidos).' 
-            });
-        }
-        const imcCalculado = imcResult.rows[0].imc;
-
-        // 2. Llamar a la función de diagnóstico de IMC
-        const clasificacionSql = 'SELECT public.diagnosticar_imc($1, $2, $3) AS clasificacion'; 
-        const clasificacionParams = [pacienteIdNum, fecha, imcCalculado]; 
+        // 1. Llamar a la función de diagnóstico de IMC (pasando pacienteId y fecha)
+        //    La función interna busca el IMC precalculado y la descripción.
+        const clasificacionSql = 'SELECT public.diagnosticar_imc($1, $2) AS clasificacion'; // *** Llamar con 2 parámetros ***
+        const clasificacionParams = [pacienteIdNum, fecha]; // *** Pasar pacienteId y fecha ***
         const clasificacionResult = await pool.query(clasificacionSql, clasificacionParams);
 
-        // 3. Procesar el resultado 
-        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 || clasificacionResult.rows[0].clasificacion === null) {
-             // Puede ocurrir si la función devuelve NULL internamente
-            return res.status(500).json({ status: 'error', mensaje: 'No se pudo obtener la clasificación IMC.' }); 
+        // 2. Procesar el resultado (Texto o NULL)
+        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 ) {
+             return res.status(500).json({ status: 'error', mensaje: 'Error al obtener respuesta de la función de diagnóstico IMC.' }); 
         }
+        
+        const clasificacionTexto = clasificacionResult.rows[0].clasificacion; 
 
-        const clasificacionTexto = clasificacionResult.rows[0].clasificacion;
-
-        // Manejar errores conocidos devueltos por la función 'diagnosticar_imc'
-        const erroresConocidos = [ 
+        // Si la función devolvió NULL (por error interno no capturado o validación inicial)
+        if (clasificacionTexto === null) {
+             return res.status(500).json({ // O 400 si prefieres
+                 status: 'error',
+                 mensaje: 'No se pudo obtener un diagnóstico válido para IMC (Error interno o parámetros inválidos).' 
+             });
+         }
+         
+         // Verificar si la respuesta es uno de los mensajes de error/informativos de la función
+         const erroresConocidos = [ 
             'Paciente no encontrado', 
             'Fecha de nacimiento no registrada', 
-            'Clasificación no disponible para esta edad'
-            // Añadir otros si la función los devuelve
-        ];
+            'IMC no calculado previamente para esta fecha',
+            'Clasificación no disponible para esta edad/IMC',
+            // Podría haber otros como 'Descripción no encontrada para ID X'
+         ];
         if (erroresConocidos.includes(clasificacionTexto)) {
-             const statusCode = (clasificacionTexto === 'Paciente no encontrado') ? 404 : 400; 
+             const statusCode = (clasificacionTexto === 'Paciente no encontrado' || clasificacionTexto.startsWith('IMC no calculado')) ? 404 : 400; 
              return res.status(statusCode).json({ status: 'error', mensaje: `No se pudo clasificar: ${clasificacionTexto}` });
          }
 
-        // 4. Devolver la clasificación obtenida
+        // 3. Devolver la clasificación obtenida (Texto)
         res.status(200).json({
             status: 'success',
             pacienteId: pacienteIdNum,
             fecha: fecha,
-            imcCalculado: imcCalculado, // Valor de IMC usado
+            // Ya no devolvemos imcCalculado
             clasificacion: clasificacionTexto // El diagnóstico devuelto por la función
         });
 
     } catch (error) {
         console.error("Error en GET /diagnosticar_imc:", error); 
-        const dbErrorMessage = error.message || 'Error desconocido en base de datos.';
+        const dbErrorMessage = error.message || 'Error desconocido.';
         res.status(500).json({
             status: 'error',
-            mensaje: 'Error interno del servidor al intentar obtener la clasificación IMC.', 
-            detalle_db: dbErrorMessage // Opcional
+            mensaje: 'Error interno del servidor al intentar obtener el diagnóstico IMC.', 
+            detalle_db: dbErrorMessage 
         });
     }
 });
@@ -692,43 +698,49 @@ router.get('/diagnosticar_ict', async (req, res) => {
         }
         const pacienteIdNum = parseInt(pacienteId, 10);
 
-        // 1. Calcular el ICT usando la función 'calcular_ict'
-        const ictResult = await pool.query('SELECT public.calcular_ict($1, $2) as ict', [pacienteIdNum, fecha]); 
-        
-        if (!ictResult.rows || ictResult.rows.length === 0 || ictResult.rows[0].ict === null) {
-            return res.status(404).json({
-                status: 'not_found',
-                mensaje: 'No se pudo calcular el ICT para el paciente y fecha especificados (datos fuente podrían faltar o ser inválidos).' 
-            });
-        }
-        const ictCalculado = ictResult.rows[0].ict;
-
-        // 2. Llamar a la función de diagnóstico de ICT (pasando solo el valor calculado)
-        const clasificacionSql = 'SELECT public.diagnosticar_ict($1) AS clasificacion'; // Llamar a la nueva función con 1 parámetro
-        const clasificacionParams = [ictCalculado]; // Solo el ICT calculado
+        // 1. Llamar directamente a la función de diagnóstico de ICT 
+        //    espera pacienteId y fecha
+        const clasificacionSql = 'SELECT public.diagnosticar_ict($1, $2) AS clasificacion'; 
+        const clasificacionParams = [pacienteIdNum, fecha]; 
         const clasificacionResult = await pool.query(clasificacionSql, clasificacionParams);
 
-        // 3. Procesar el resultado 
-        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 || clasificacionResult.rows[0].clasificacion === null) {
-            // Podría ocurrir si la función diagnosticar_ict devolvió NULL
-            return res.status(500).json({ status: 'error', mensaje: 'No se pudo obtener la clasificación ICT.' }); 
+        // 2. Procesar el resultado (Texto o NULL)
+        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 ) {
+             return res.status(500).json({ status: 'error', mensaje: 'Error al obtener respuesta de la función de diagnóstico ICT.' }); 
         }
+        
+        const clasificacionTexto = clasificacionResult.rows[0].clasificacion; 
 
-        const clasificacionTexto = clasificacionResult.rows[0].clasificacion;
+        // Si la función devolvió NULL (por error interno)
+        if (clasificacionTexto === null) {
+             return res.status(500).json({ // Usamos 500 porque la función no debería devolver NULL si los datos existen
+                 status: 'error',
+                 mensaje: 'Error inesperado al obtener el diagnóstico ICT.' 
+             });
+         }
+         
+         // Verificar si la respuesta es uno de los mensajes de error/informativos de la función
+         const erroresConocidos = [ 
+            'ICT no calculado previamente para esta fecha', 
+            'Valor ICT no clasificable',
+         ];
+        if (erroresConocidos.includes(clasificacionTexto)) {
+             // Usamos 404 si el ICT no estaba calculado, 400 para otros
+             const statusCode = (clasificacionTexto === 'ICT no calculado previamente para esta fecha') ? 404 : 400; 
+             return res.status(statusCode).json({ status: 'error', mensaje: `No se pudo clasificar: ${clasificacionTexto}` });
+         }
 
-        // 4. Devolver la clasificación obtenida
+        // 3. Devolver la clasificación obtenida (Texto)
         res.status(200).json({
             status: 'success',
             pacienteId: pacienteIdNum,
             fecha: fecha,
-            ictCalculado: ictCalculado, // Valor de ICT usado
-            clasificacion: clasificacionTexto // El diagnóstico devuelto por la función
+            clasificacion: clasificacionTexto 
         });
 
     } catch (error) {
-        // Manejo de errores generales
         console.error("Error en GET /diagnosticar_ict:", error); 
-        const dbErrorMessage = error.message || 'Error desconocido en base de datos.';
+        const dbErrorMessage = error.message || 'Error desconocido.';
         res.status(500).json({
             status: 'error',
             mensaje: 'Error interno del servidor al intentar obtener la clasificación ICT.', 
