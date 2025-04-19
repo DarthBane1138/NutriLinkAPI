@@ -51,5 +51,30 @@ router.post('/nutricionista_insertar', async (req, res) => {
     }
   });
 
+
+  router.post('/auth_nutricionista', async (req, res) => {
+    const { correo, contrasena } = req.body;
+  
+    try {
+      const result = await pool.query(`
+        SELECT contrasena FROM nutricionista WHERE correo = $1
+      `, [correo]);
+  
+      if (result.rows.length === 0) {
+        return res.status(401).json({ status: 'error', mensaje: 'Correo no registrado' });
+      }
+  
+      if (result.rows[0].contrasena !== contrasena) {
+        return res.status(401).json({ status: 'error', mensaje: 'Contraseña incorrecta' });
+      }
+  
+      res.status(200).json({ status: 'ok', mensaje: 'Autenticación exitosa' });
+  
+    } catch (error) {
+      console.error('Error en autenticación:', error);
+      res.status(500).json({ status: 'error', mensaje: 'Error del servidor' });
+    }
+  });
+
 app.use(router);
 module.exports = router

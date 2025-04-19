@@ -15,4 +15,5 @@ app.use("/api_nutrilink/antropometria", require("./routes/antropometria.js"));
 
 app.listen(PORT, () => {
   console.log(`Servidor corriendo en ${PORT}`);
+  //console.log(`http://localhost:3000`);
 });
