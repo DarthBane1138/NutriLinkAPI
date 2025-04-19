@@ -461,85 +461,71 @@ router.post('/guardar_antropometria', async (req, res) => {
 });
 
 // Endpoint para OBTENER LA CLASIFICACIÓN del Área Muscular Braquial (AMB)
-router.get('/diagnosticar_amb', async (req, res) => {
+router.get('/diagnosticar_amb', async (req, res) => { 
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET'); 
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     try {
-        // 1. Obtener parámetros de la query string (?pacienteId=...&fecha=...)
         const { pacienteId, fecha } = req.query;
 
-        // 2. Validación básica de entrada
-        if (!pacienteId || !fecha) {
-            return res.status(400).json({
-                status: 'error',
-                mensaje: 'Faltan parámetros requeridos en la query string: "pacienteId" y "fecha".'
-            });
+        // Validación 
+        if (!pacienteId || !fecha) {  
+            return res.status(400).json({ status: 'error', mensaje: 'Faltan parámetros requeridos: "pacienteId" y "fecha".' });
         }
         const pacienteIdNum = parseInt(pacienteId, 10);
 
-        // 3. Calcular el AMB usando la función existente
-        const ambResult = await pool.query('SELECT public.calcular_amb($1, $2) as amb', [pacienteIdNum, fecha]);
-        
-        // Verificar si se pudo calcular el AMB
-        if (!ambResult.rows || ambResult.rows.length === 0 || ambResult.rows[0].amb === null) {
-            return res.status(404).json({
-                status: 'not_found',
-                mensaje: 'No se pudo calcular el AMB para el paciente y fecha especificados (datos fuente podrían faltar o ser inválidos).'
-            });
-        }
-        const ambCalculado = ambResult.rows[0].amb;
-
-        // 4. Llamar a la función de clasificación que calcula edad y obtiene sexo internamente
-        const clasificacionSql = 'SELECT public.diagnosticar_amb($1, $2, $3) AS clasificacion';
-        // Pasamos pacienteId, fecha y el AMB calculado
-        const clasificacionParams = [pacienteIdNum, fecha, ambCalculado]; 
+        // 1. Llamar directamente a la función de diagnóstico de AMB 
+        //    que ahora espera solo pacienteId y fecha
+        const clasificacionSql = 'SELECT public.diagnosticar_amb($1, $2) AS clasificacion'; 
+        const clasificacionParams = [pacienteIdNum, fecha]; 
         const clasificacionResult = await pool.query(clasificacionSql, clasificacionParams);
 
-        // 5. Procesar el resultado de la función de clasificación
-        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 || clasificacionResult.rows[0].clasificacion === null) {
-            // Puede ocurrir si la función devuelve NULL por alguna condición no manejada
-            return res.status(500).json({
-                status: 'error',
-                mensaje: 'No se pudo obtener la clasificación AMB desde la base de datos.'
-            });
+        // 2. Procesar el resultado (Texto o NULL)
+        if (!clasificacionResult.rows || clasificacionResult.rows.length === 0 ) {
+             return res.status(500).json({ status: 'error', mensaje: 'Error al obtener respuesta de la función de diagnóstico AMB.' }); 
         }
+        
+        const clasificacionTexto = clasificacionResult.rows[0].clasificacion; 
 
-        const clasificacionTexto = clasificacionResult.rows[0].clasificacion;
-
-        // Manejar respuestas de error específicas devueltas como texto por la función
-        const erroresConocidos = [
+        // Si la función devolvió NULL (por error interno no capturado o validación inicial fallida)
+        if (clasificacionTexto === null) {
+             return res.status(500).json({ // O 400 
+                 status: 'error',
+                 mensaje: 'No se pudo obtener un diagnóstico válido para AMB (Error interno o parámetros inválidos).' 
+             });
+         }
+         
+         // Verificar si la respuesta es uno de los mensajes de error/informativos de la función
+         const erroresConocidos = [ 
             'Paciente no encontrado', 
             'Datos incompletos del paciente (sexo/fecha nac.)', 
             'Sexo inválido registrado',
-            'Edad fuera de rango' 
-        ];
-
-        if (erroresConocidos.includes(clasificacionTexto)) {
-             // Usamos 404 si el paciente no existe, 400 para otros datos inválidos
-             const statusCode = (clasificacionTexto === 'Paciente no encontrado') ? 404 : 400; 
-             return res.status(statusCode).json({
-                 status: 'error',
-                 mensaje: `No se pudo clasificar: ${clasificacionTexto}`
-             });
+            'AMB no calculado previamente para esta fecha', // Nuevo error posible
+            'Clasificación no disponible', // Si edad/valor no aplica
+            // Podría haber otros como 'Descripción no encontrada para ID X'
+         ];
+        if (erroresConocidos.includes(clasificacionTexto) || clasificacionTexto.startsWith('Descripción no encontrada')) {
+             // 404 si el paciente o el AMB precalculado no existen, 400 para otros
+             const statusCode = (clasificacionTexto === 'Paciente no encontrado' || clasificacionTexto.startsWith('AMB no calculado')) ? 404 : 400; 
+             return res.status(statusCode).json({ status: 'error', mensaje: `No se pudo clasificar: ${clasificacionTexto}` });
          }
 
-        // 6. Devolver la clasificación obtenida si no es un error conocido
+        // 3. Devolver la clasificación obtenida (Texto)
         res.status(200).json({
             status: 'success',
             pacienteId: pacienteIdNum,
             fecha: fecha,
-            ambCalculado: ambCalculado, // Devolver el valor usado
             clasificacion: clasificacionTexto // El diagnóstico devuelto por la función
         });
 
     } catch (error) {
-        // 7. Manejo de errores generales (conexión, error SQL no manejado en la función)
-        console.error("Error en GET /diagnosticar_amb:", error);
+        console.error("Error en GET /diagnosticar_amb:", error); 
+        const dbErrorMessage = error.message || 'Error desconocido.';
         res.status(500).json({
             status: 'error',
-            mensaje: 'Error interno del servidor al intentar obtener la clasificación AMB.',
+            mensaje: 'Error interno del servidor al intentar obtener el diagnóstico AMB.', 
+            detalle_db: dbErrorMessage 
         });
     }
 });
